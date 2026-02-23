@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Veg Batch Checker — v2.0.4</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="theme-color" content="#16a34a" />
+  <style>
+    button{touch-action:manipulation}
+    @keyframes bounce-in { 
+      0% { transform: scale(0.9) translateX(-50%); opacity: 0; left: 50%; } 
+      100% { transform: scale(1) translateX(-50%); opacity: 1; left: 50%; } 
+    }
+    .animate-bounce-in { animation: bounce-in 0.2s ease-out forwards; }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+  const { useState, useEffect, useRef } = React;
+
+  const APP_VERSION = "2.0.4";
+  const STORAGE_KEY = "veg-batch-checker:v9";
+  const VEG_DB_KEY = "veg-batch-checker:vegdb";
+  const META_KEY = "veg-batch-checker:meta";
+
+  const uid = () => Math.random().toString(36).slice(2,10);
+
+  function getRequiredStages(batch) {
+    if (batch.requiredStages) return batch.requiredStages;
+    if (/broccoli|tenderstem/i.test(batch.veg)) return ["Banging check", "Water", "Thrip cloth"];
+    if (/cauliflower/i.test(batch.veg)) return ["Visual check", "Water", "Thrip cloth"];
+    return ["Water", "Thrip cloth"];
+  }
+
+  function nextStage(batch) {
+    const cur = batch.history.filter(h => h.attempt === batch.attempt);
+    const reqs = getRequiredStages(batch);
+    for (const stage of reqs) {
+      if (!cur.some(h => h.stage === stage && h.result === "Pass")) {
+        return stage;
+      }
+    }
+    return "Done";
+  }
+
+  function VegDBManager({ vegDB, setVegDB }) {
+    const [newName, setNewName] = useState("");
+    const [needsBang, setNeedsBang] = useState(false);
+    const [needsVisual, setNeedsVisual] = useState(false);
+
+    const addVeg = () => {
+      const n = newName.trim();
+      if (!n) return;
+      if (vegDB.some(v => v.name.toLowerCase() === n.toLowerCase())) { setNewName(""); return; }
+      setVegDB([...vegDB, { name: n, requiresBang: needsBang, requiresVisual: needsVisual }]);
+      setNewName("");
+      setNeedsBang(false);
+      setNeedsVisual(false);
+    };
+
+    const remove = (name) => setVegDB(vegDB.filter(x => x.name !== name));
+
+    return (
+      <div className="mt-2 space-y-2">
+        <div className="flex flex-col gap-2 p-3 bg-gray-50 rounded-xl border">
+          <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="New vegetable name" className="border rounded-lg p-2" />
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={needsBang} onChange={e=>setNeedsBang(e.target.checked)} className="rounded w-4 h-4" />
+              Requires 'Banging check' stage
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={needsVisual} onChange={e=>setNeedsVisual(e.target.checked)} className="rounded w-4 h-4" />
+              Requires 'Visual check' stage
+            </label>
+          </div>
+          <button onClick={addVeg} className="py-2 rounded-lg bg-gray-900 text-white w-full">Add to Database</button>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-2">
+          {vegDB.map(v => (
+            <span key={v.name} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-100 text-sm border">
+              {v.name} 
+              {v.requiresBang && <span title="Requires Banging Check" className="text-[10px] font-bold text-red-500 ml-1">(Bang)</span>}
+              {v.requiresVisual && <span title="Requires Visual Check" className="text-[10px] font-bold text-blue-500 ml-1">(Visual)</span>}
+              <button onClick={()=>remove(v.name)} className="text-gray-400 hover:text-red-600 ml-1">×</button>
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function HoldResetButton({ onConfirm, className }) {
+    const [holdProgress, setHoldProgress] = useState(0);
+    const timerRef = useRef(null);
+
+    const handleStart = () => {
+      const startTime = Date.now();
+      timerRef.current = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min((elapsed / 1500) * 100, 100);
+        setHoldProgress(progress);
+        if (progress >= 100) {
+          clearInterval(timerRef.current);
+          onConfirm();
+          setHoldProgress(0);
+        }
+      }, 20);
+    };
+
+    const handleEnd = () => {
+      clearInterval(timerRef.current);
+      setHoldProgress(0);
+    };
+
+    return (
+      <button 
+        onMouseDown={handleStart} onMouseUp={handleEnd} onMouseLeave={handleEnd}
+        onTouchStart={handleStart} onTouchEnd={handleEnd}
+        className={`relative overflow-hidden ${className || 'px-3 py-2 rounded-xl bg-gray-200 text-gray-800'}`}
+      >
+        <span className="relative z-10">Hold to Reset</span>
+        <div 
+          className="absolute bottom-0 left-0 h-full bg-black transition-all duration-75"
+          style={{ width: `${holdProgress}%`, opacity: holdProgress > 0 ? 0.2 : 0 }}
+        ></div>
+      </button>
+    );
+  }
+
+  function App() {
+    const [batches, setBatches] = useState(() => {
+      try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) return JSON.parse(raw); } catch {}
+      return [];
+    });
+    
+    const defaultVegDB = [
+      { name: "Romaine", requiresBang: false, requiresVisual: false },
+      { name: "Iceberg", requiresBang: false, requiresVisual: false },
+      { name: "Leeks", requiresBang: false, requiresVisual: false },
+      { name: "Spinach", requiresBang: false, requiresVisual: false },
+      { name: "Herbs", requiresBang: false, requiresVisual: false },
+      { name: "Corn", requiresBang: false, requiresVisual: false },
+      { name: "Broccoli", requiresBang: true, requiresVisual: false },
+      { name: "Tenderstem", requiresBang: true, requiresVisual: false },
+      { name: "Cauliflower", requiresBang: false, requiresVisual: true }
+    ];
+
+    const [vegDB, setVegDB] = useState(() => {
+      try { const raw = localStorage.getItem(VEG_DB_KEY); if (raw) return JSON.parse(raw); } catch {}
+      return defaultVegDB;
+    });
+
+    const [tab, setTab] = useState("Jobs");
+    const [veg, setVeg] = useState("");
+    const [qty, setQty] = useState("1");
+    const [customRequiresBang, setCustomRequiresBang] = useState(false);
+    const [customRequiresVisual, setCustomRequiresVisual] = useState(false);
+    const [toasts, setToasts] = useState([]);
+    const [selectedQty, setSelectedQty] = useState(1);
+
+    const [expanded, setExpanded] = useState([]);
+    const [now, setNow] = useState(Date.now());
+    
+    useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+    useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(batches)); }, [batches]);
+    useEffect(() => { localStorage.setItem(VEG_DB_KEY, JSON.stringify(vegDB)); }, [vegDB]);
+    useEffect(() => {
+      try { localStorage.setItem(META_KEY, JSON.stringify({ version: APP_VERSION, savedAt: new Date().toISOString() })); } catch (e) {}
+    }, []);
+
+    const planned = batches.filter(b => b.status === "Planned");
+    const active = batches.filter(b => b.status === "In Progress");
+    const completed = batches.filter(b => b.status === "Passed");
+    const discarded = batches.filter(b => b.status === "Discarded");
+    const incomplete = [...planned, ...active, ...discarded];
+
+    const addToast = (msg, type = "success") => {
+      const id = uid();
+      setToasts(prev => [...prev, { id, msg, type }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
+    };
+
+    const quickAdd = (vegObj, count) => {
+      let n = parseInt(count, 10); if (!Number.isFinite(n) || n<1) n=1; if (n>500) n=500;
+      
+      const reqStages = [];
+      if (vegObj.requiresVisual) reqStages.push("Visual check");
+      if (vegObj.requiresBang) reqStages.push("Banging check");
+      reqStages.push("Water", "Thrip cloth");
+
+      const newOnes = Array.from({length:n}, (_,i)=> ({
+        id: uid(),
+        veg: vegObj.name,
+        qty: n>1 ? `#${i+1} of ${n}` : undefined,
+        status: "Planned",
+        attempt: 0,
+        history: [],
+        requiredStages: reqStages,
+        bangingRejects: 0
+      }));
+      setBatches(prev => [...newOnes, ...prev]);
+      addToast(`Added ${n} ${vegObj.name}`);
+    };
+
+    const addBatch = () => {
+      const name = veg.trim();
+      if (!name) return;
+      quickAdd({ name, requiresBang: customRequiresBang, requiresVisual: customRequiresVisual }, qty);
+      setVeg(""); setQty("1"); setCustomRequiresBang(false); setCustomRequiresVisual(false);
+    };
+
+    const startFromPlan = (id) => {
+      const ts = Date.now();
+      setBatches(prev => prev.map(b => b.id===id ? { ...b, status:"In Progress", timerStart: ts } : b));
+      setTab("Jobs");
+      setExpanded(prev => prev.includes(id) ? prev : [...prev, id]);
+    };
+
+    const deleteBatch = (id) => {
+      setBatches(prev => prev.filter(b => b.id !== id));
+      setExpanded(prev => prev.filter(x => x !== id));
+    };
+
+    const toggleExpand = (id) => {
+      setExpanded(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
+    };
+
+    const recordResult = (id, result) => {
+      const batch = batches.find(b => b.id === id);
+      if (!batch) return;
+      const stage = nextStage(batch);
+
+      if (result === "RejectItem") {
+        setBatches(prev => prev.map(b => b.id === id ? { ...b, bangingRejects: (b.bangingRejects || 0) + 1 } : b));
+        return;
+      }
+
+      let finalResult = result;
+      if (result === "FinishBanging") {
+        finalResult = "Pass";
+        addToast(`${batch.veg}: Finished Banging`, "success");
+      } else if (result === "CompleteVisual") {
+        finalResult = "Pass";
+        addToast(`${batch.veg}: Visual Check Completed`, "success");
+      } else if (result === "Pass") {
+        addToast(`${batch.veg}: Passed ${stage}`, "success");
+      } else {
+        addToast(`${batch.veg}: Failed ${stage}`, "error");
+      }
+
+      setExpanded(prev => prev.filter(x => x !== id));
+      setBatches(prev => prev.map(b => {
+        if (b.id !== id || b.status !== "In Progress") return b;
+        
+        const ev = { ts: Date.now(), stage, result: finalResult, attempt: b.attempt };
+        const history = [...b.history, ev];
+        
+        if (finalResult === "Fail") {
+          if (b.attempt === 0) return { ...b, firstFailStage: b.firstFailStage || stage, status: "Planned", attempt: 1, history };
+          return { ...b, firstFailStage: b.firstFailStage || stage, status: "Discarded", history };
+        } else {
+          const cur = history.filter(h => h.attempt === b.attempt);
+          const reqs = getRequiredStages(b);
+          const allPassed = reqs.every(reqStage => cur.some(h => h.stage === reqStage && h.result === "Pass"));
+          
+          if (allPassed) return { ...b, status: "Passed", history };
+          if (result === "FinishBanging" || result === "CompleteVisual") return { ...b, status: "Planned", history };
+          return { ...b, status: "In Progress", history };
+        }
+      }));
+    };
+
+    const makeEODText = () => {
+      const byVeg = new Map();
+      for (const b of batches) {
+        const k = b.veg;
+        if (!byVeg.has(k)) byVeg.set(k, { total:0, rewashWater:0, rewashThrip:0, rejects:0, bangingRejects:0 });
+        const r = byVeg.get(k);
+        r.total += 1;
+        if (b.firstFailStage === "Water") r.rewashWater += 1;
+        if (b.firstFailStage === "Thrip cloth") r.rewashThrip += 1;
+        if (b.status === "Discarded") r.rejects += 1;
+        if (b.bangingRejects > 0) r.bangingRejects += b.bangingRejects;
+      }
+      const lines = [];
+      const order = [...byVeg.keys()].sort((a,b)=>a.toLowerCase().localeCompare(b.toLowerCase()));
+      for (const veg of order) {
+        const r = byVeg.get(veg);
+        const parts = [];
+        if (r.rewashWater===0 && r.rewashThrip===0 && r.rejects===0 && r.bangingRejects===0) {
+          parts.push("all clean");
+        } else {
+          const issues = [];
+          if (r.bangingRejects>0) issues.push(`${r.bangingRejects} failed at banging`);
+          if (r.rewashWater>0) issues.push(`${r.rewashWater} rewash (Water)`);
+          if (r.rewashThrip>0) issues.push(`${r.rewashThrip} rewash (Thrip cloth)`);
+          if (issues.length > 0) parts.push(issues.join(", "));
+          if (r.rejects>0) parts.push(`${r.rejects} reject${r.rejects>1?"s":""}`);
+        }
+        lines.push(`${veg} (${r.total} bowls) ${parts.join(" ")}`.trim());
+      }
+      return lines.join("\n");
+    };
+
+    const downloadEOD = () => {
+      const blob = new Blob([makeEODText()], { type: "text/plain;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `veg_eod_${new Date().toISOString().slice(0,10)}.txt`;
+      a.click(); URL.revokeObjectURL(url);
+    };
+
+    const copyEOD = async () => {
+      try { await navigator.clipboard.writeText(makeEODText()); addToast("Summary copied.", "success"); } 
+      catch { addToast("Could not copy. Use Download TXT.", "error"); }
+    };
+
+    const makeCSV = () => {
+      const byVeg = new Map();
+      for (const b of batches) {
+        const k = b.veg;
+        if (!byVeg.has(k)) byVeg.set(k, { planned:0, passed:0, discarded:0, firstFailWater:0, firstFailThrip:0, rewashes:0, bangingRejects:0 });
+        const r = byVeg.get(k);
+        r.planned += 1;
+        if (b.status === "Passed") r.passed += 1;
+        if (b.status === "Discarded") r.discarded += 1;
+        if (b.firstFailStage === "Water") r.firstFailWater += 1;
+        if (b.firstFailStage === "Thrip cloth") r.firstFailThrip += 1;
+        if (b.attempt > 0) r.rewashes += 1;
+        if (b.bangingRejects > 0) r.bangingRejects += b.bangingRejects;
+      }
+      const rows = [
+        ["Veg","Planned","Passed","Discarded","Failed at Banging","First fail: Water","First fail: Thrip cloth","Had rewash (>=1 fail)"],
+        ...Array.from(byVeg.entries()).map(([k,r])=>[k,r.planned,r.passed,r.discarded,r.bangingRejects,r.firstFailWater,r.firstFailThrip,r.rewashes]),
+        [],["Details"],
+        ["ID","Veg","Qty/Notes","Status","Attempt","BangingRejects","FirstFailStage","EventTime","Stage","Result","Attempt#"],
+        ...batches.flatMap(b => b.history.length===0
+          ? [[b.id,b.veg,b.qty??"",b.status,b.attempt,b.bangingRejects||0,b.firstFailStage??"","","","",""]]
+          : b.history.map(h => [b.id,b.veg,b.qty??"",b.status,b.attempt,b.bangingRejects||0,b.firstFailStage??"", new Date(h.ts).toLocaleString(), h.stage, h.result, h.attempt]))
+      ];
+      const NL="\r\n";
+      const toCSV = rs => rs.map(r=>r.map(v=>{
+        const s=String(v??""); return /[,\"\n]/.test(s)?('"' + s.replace(/"/g,'""') + '"'):s;
+      }).join(",")).join(NL);
+      const csv = toCSV(rows)+NL;
+      const blob = new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href=url; a.download=`veg_report_${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    };
+
+    const exportJSON = () => {
+      const blob = new Blob([JSON.stringify(batches,null,2)],{type:"application/json"});
+      const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`veg_batches_${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
+    };
+
+    const importJSON = (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { 
+        try { 
+          const data = JSON.parse(String(reader.result)); 
+          if (!Array.isArray(data)) throw 0; 
+          setBatches(data); 
+          addToast("Data imported successfully");
+        } catch { addToast("Could not import JSON file", "error"); } 
+      };
+      reader.readAsText(file);
+    };
+    
+    const resetDay = () => { setBatches([]); setExpanded([]); addToast("All data cleared", "success"); };
+
+    const Badge = ({ children, color }) => <span className={"px-2 py-0.5 rounded-full text-xs font-medium "+color}>{children}</span>;
+    const TimerChip = ({ b }) => {
+      if (!(b.status==="In Progress" && b.timerStart)) return null;
+      if (nextStage(b) !== "Water") return null;
+
+      const rem = Math.max(0, 180000 - (now - b.timerStart));
+      const m = Math.floor(rem/60000);
+      const s = String(Math.floor((rem%60000)/1000)).padStart(2,"0");
+      return <span className={"text-xs px-1.5 py-0.5 rounded " + (rem===0 ? "bg-red-600 text-white" : "bg-gray-200 text-gray-800")}>{m}:{s}</span>;
+    };
+
+    const JobCard = ({ b }) => {
+      const currentStage = nextStage(b);
+
+      return (
+        <div className="relative bg-white rounded-2xl shadow p-4">
+          {b.attempt > 0 && <span className="absolute top-0 left-0 w-0 h-0 border-t-[28px] border-t-black border-r-[28px] border-r-transparent" title="Rewash"></span>}
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-semibold flex items-center gap-2">
+                {b.veg} <TimerChip b={b} />
+              </div>
+              <div className="mt-1 flex gap-2 items-center">
+                {b.status === "In Progress" && <Badge color="bg-blue-100 text-blue-700">In Progress</Badge>}
+                {b.status === "Passed" && <Badge color="bg-emerald-100 text-emerald-700">Passed</Badge>}
+                {b.status === "Discarded" && <Badge color="bg-red-100 text-red-700">Discarded</Badge>}
+                {["Water", "Thrip cloth"].includes(currentStage) && <span className="text-[11px] text-gray-400">Attempt {b.attempt + 1}</span>}
+                {b.status === "In Progress" && <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{currentStage}</span>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {b.status === "In Progress" && <button onClick={()=>toggleExpand(b.id)} className="px-3 py-2 rounded-xl bg-emerald-600 text-white">{expanded.includes(b.id) ? "Hide" : "Check"}</button>}
+              <button onClick={()=>deleteBatch(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
+            </div>
+          </div>
+          {expanded.includes(b.id) && b.status === "In Progress" && (
+            currentStage === "Banging check" ? (
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex justify-between items-center bg-gray-100 p-3 rounded-xl border border-gray-200">
+                  <span className="font-semibold text-gray-700">Items failed at banging:</span>
+                  <span className="text-xl font-bold text-red-600">{b.bangingRejects || 0}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={()=>recordResult(b.id,"RejectItem")} className="h-20 text-lg leading-tight font-bold rounded-2xl text-white bg-orange-500 active:scale-[.99]">REJECT<br/>ITEM</button>
+                  <button onClick={()=>recordResult(b.id,"FinishBanging")} className="h-20 text-lg leading-tight font-bold rounded-2xl text-white bg-emerald-600 active:scale-[.99]">FINISH<br/>BANGING</button>
+                </div>
+              </div>
+            ) : currentStage === "Visual check" ? (
+              <div className="mt-4">
+                <button onClick={()=>recordResult(b.id,"CompleteVisual")} className="w-full h-24 text-2xl font-bold rounded-2xl text-white bg-blue-600 active:scale-[.99]">COMPLETE<br/>VISUAL CHECK</button>
+              </div>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button onClick={()=>recordResult(b.id,"Pass")} className="h-24 text-2xl font-bold rounded-2xl text-white bg-emerald-600 active:scale-[.99]">PASS</button>
+                <button onClick={()=>recordResult(b.id,"Fail")} className="h-24 text-2xl font-bold rounded-2xl text-white bg-red-600 active:scale-[.99]">FAIL</button>
+              </div>
+            )
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <div className="min-h-screen flex flex-col relative">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 w-full max-w-xs pointer-events-none">
+          {toasts.map(t => (
+            <div key={t.id} className={`px-4 py-3 rounded-2xl shadow-lg text-white text-center font-medium animate-bounce-in ${t.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'}`}>
+              {t.msg}
+            </div>
+          ))}
+        </div>
+
+        <header className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
+          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
+            <h1 className="text-lg font-bold">Veg Batch Checker</h1>
+            <div className="flex items-center gap-3">
+              <nav className="flex gap-1 text-sm">
+                {["Jobs","Plan","Reports"].map(t => (
+                  <button key={t} onClick={()=>setTab(t)} className={"px-3 py-1.5 rounded-xl " + (tab===t ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-800")}>{t}</button>
+                ))}
+              </nav>
+              <span className="text-xs text-gray-500">v{APP_VERSION}</span>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-3xl mx-auto w-full px-4 py-4">
+          {tab==="Jobs" && (
+            <div className="space-y-3">
+              {active.length===0 && <p className="text-sm text-gray-500">No jobs in progress. Start some below.</p>}
+              {active.map(b => <JobCard key={b.id} b={b} />)}
+              {planned.length>0 && (
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold text-gray-600 mb-2">Available jobs</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[...planned].sort((a,b)=>a.veg.toLowerCase().localeCompare(b.veg.toLowerCase())).map(b => {
+                      const isBanged = b.history.some(h => h.attempt === b.attempt && h.stage === "Banging check" && h.result === "Pass");
+                      const needsBang = b.requiredStages && b.requiredStages.includes("Banging check");
+                      const isVisualDone = b.history.some(h => h.attempt === b.attempt && h.stage === "Visual check" && h.result === "Pass");
+                      const needsVisual = b.requiredStages && b.requiredStages.includes("Visual check");
+
+                      return (
+                        <button key={b.id} onClick={()=>startFromPlan(b.id)} className="relative px-3 py-2 rounded-xl bg-blue-600 text-white overflow-hidden text-left flex flex-col items-start gap-1">
+                          {b.attempt > 0 && <span className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-t-black border-r-[20px] border-r-transparent" title="Rewash"></span>}
+                          <span className="font-medium">{b.veg}</span>
+                          <div className="flex gap-1 flex-wrap">
+                            {needsBang && !isBanged && <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold leading-none">Bang</span>}
+                            {isBanged && <span className="text-[10px] bg-blue-800 text-white px-1.5 py-0.5 rounded font-bold leading-none">Banged</span>}
+                            {needsVisual && !isVisualDone && <span className="text-[10px] bg-purple-600 text-white px-1.5 py-0.5 rounded font-bold leading-none">Visual</span>}
+                            {isVisualDone && <span className="text-[10px] bg-blue-800 text-white px-1.5 py-0.5 rounded font-bold leading-none">Visual Done</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab==="Plan" && (
+            <div className="space-y-4">
+              <div className="bg-white rounded-2xl shadow p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-semibold">Vegetable Database</h2>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span>Qty:</span>
+                    {[1,2,4,6,8].map(n => (
+                      <button key={n} onClick={()=>setSelectedQty(n)} className={"px-2 py-1 rounded-lg border " + (selectedQty===n ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-800")}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {vegDB.map(vegObj => (
+                    <button key={vegObj.name} onClick={()=>quickAdd(vegObj, selectedQty)} className="px-3 py-2 rounded-xl bg-blue-600 text-white flex justify-center items-center gap-1">
+                      {vegObj.name} 
+                      {vegObj.requiresBang && <span className="text-[10px] text-red-300 font-bold ml-1">(Bang)</span>}
+                      {vegObj.requiresVisual && <span className="text-[10px] text-purple-300 font-bold ml-1">(Visual)</span>}
+                    </button>
+                  ))}
+                </div>
+                <details className="mt-4 border-t pt-3">
+                  <summary className="cursor-pointer text-sm font-medium text-gray-700">Manage Database...</summary>
+                  <VegDBManager vegDB={vegDB} setVegDB={setVegDB} />
+                </details>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow p-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">One-off Custom Veg</h2>
+                  <HoldResetButton onConfirm={resetDay} className="px-3 py-2 rounded-xl bg-red-600 text-white font-semibold" />
+                </div>
+                <div className="mt-3 space-y-3">
+                  <input value={veg} onChange={e=>setVeg(e.target.value)} placeholder="Veg name (e.g., Rare Mushroom)" className="w-full border rounded-xl p-3"/>
+                  <input type="number" min="1" max="500" inputMode="numeric" value={qty} onChange={e=>setQty(e.target.value)} placeholder="Quantity (jobs to create)" className="w-full border rounded-xl p-3"/>
+                  <div className="flex flex-col gap-2">
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                      <input type="checkbox" checked={customRequiresBang} onChange={e=>setCustomRequiresBang(e.target.checked)} className="rounded w-4 h-4" />
+                      Requires 'Banging check' stage
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                      <input type="checkbox" checked={customRequiresVisual} onChange={e=>setCustomRequiresVisual(e.target.checked)} className="rounded w-4 h-4" />
+                      Requires 'Visual check' stage
+                    </label>
+                  </div>
+                  <button onClick={addBatch} className="w-full py-3 rounded-xl bg-gray-900 text-white font-medium">Add temporary job</button>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow">
+                <div className="px-4 py-3 text-lg font-semibold border-b">Complete</div>
+                <div className="p-4">
+                  {completed.length===0 ? <p className="text-sm text-gray-500">No completed jobs.</p> : (
+                    <ul className="space-y-2">
+                      {completed.map(b => (
+                        <li key={b.id} className="relative flex items-center justify-between bg-gray-50 p-3 rounded-xl overflow-hidden">
+                          <span className="absolute top-0 left-0 w-0 h-0 border-t-[28px] border-t-green-600 border-r-[28px] border-r-transparent" title="Completed"></span>
+                          <div>
+                            <div className="font-medium">{b.veg}</div>
+                            <div className="text-xs text-gray-500">{b.qty || ""}</div>
+                          </div>
+                          <div className="text-xs text-emerald-700 font-medium">Passed</div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow">
+                <div className="px-4 py-3 text-lg font-semibold border-b">Incomplete</div>
+                <div className="p-4">
+                  {incomplete.length===0 ? <p className="text-sm text-gray-500">No incomplete jobs.</p> : (
+                    <ul className="space-y-2">
+                      {incomplete.map(b => (
+                        <li key={b.id} className="relative flex items-center justify-between bg-gray-50 p-3 rounded-xl overflow-hidden">
+                          {b.status!=="Planned" && <span className="absolute top-0 left-0 w-0 h-0 border-t-[28px] border-t-red-600 border-r-[28px] border-r-transparent"></span>}
+                          <div>
+                            <div className="font-medium">{b.veg}</div>
+                            <div className="text-xs text-gray-500">{b.qty || ""}</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {b.status==="Planned" ? (
+                              <button onClick={()=>startFromPlan(b.id)} className="px-3 py-2 rounded-xl bg-blue-600 text-white">Start</button>
+                            ) : (
+                              <span className={"text-xs font-medium " + (b.status==="Discarded" ? "text-red-700" : "text-blue-700")}>{b.status}</span>
+                            )}
+                            <button onClick={()=>deleteBatch(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab==="Reports" && (
+            <div className="space-y-4">
+              <div className="bg-white rounded-2xl shadow p-4">
+                <h2 className="text-lg font-semibold mb-2">End of day summary</h2>
+                <div className="flex gap-2 flex-wrap mb-3">
+                  <button onClick={copyEOD} className="px-4 py-2 rounded-xl bg-gray-200">Copy text</button>
+                  <button onClick={downloadEOD} className="px-4 py-2 rounded-xl bg-gray-200">Download TXT</button>
+                </div>
+                <pre className="whitespace-pre-wrap text-sm bg-gray-50 rounded-xl p-3 max-h-64 overflow-auto border">{makeEODText()}</pre>
+              </div>
+              <div className="bg-white rounded-2xl shadow p-4">
+                <h2 className="text-lg font-semibold mb-2">Download report</h2>
+                <button onClick={makeCSV} className="px-4 py-3 rounded-xl bg-emerald-600 text-white font-medium">Download CSV</button>
+              </div>
+              <div className="bg-white rounded-2xl shadow p-4">
+                <h2 className="text-lg font-semibold mb-2">Backup / Restore</h2>
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={exportJSON} className="px-4 py-3 rounded-xl bg-gray-200">Export JSON</button>
+                  <label className="px-4 py-3 rounded-xl bg-gray-200 cursor-pointer flex items-center">
+                    Import JSON <input type="file" accept="application/json" className="hidden" onChange={importJSON} />
+                  </label>
+                  <HoldResetButton onConfirm={resetDay} className="px-4 py-3 rounded-xl bg-red-600 text-white font-semibold" />
+                </div>
+              </div>
+            </div>
+          )}
+        </main>
+        <div className="h-4"></div>
+      </div>
+    );
+  }
+
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  root.render(<App />);
+  </script>
+</body>
+</html>
