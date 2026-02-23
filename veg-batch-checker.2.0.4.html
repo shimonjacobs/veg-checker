@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Veg Batch Checker — v2.0.4</title>
+  <title>Veg Batch Checker — v2.0.5</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <meta name="theme-color" content="#16a34a" />
   <style>
@@ -25,7 +25,7 @@
   <script type="text/babel">
   const { useState, useEffect, useRef } = React;
 
-  const APP_VERSION = "2.0.4";
+  const APP_VERSION = "2.0.5";
   const STORAGE_KEY = "veg-batch-checker:v9";
   const VEG_DB_KEY = "veg-batch-checker:vegdb";
   const META_KEY = "veg-batch-checker:meta";
@@ -134,6 +134,21 @@
       </button>
     );
   }
+
+  const TABS = [
+    { id: "Jobs", label: "Jobs" },
+    { id: "Plan", label: "Plan" },
+    { id: "Reports", label: "Reports" },
+    { 
+      id: "Settings", 
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      ) 
+    }
+  ];
 
   function App() {
     const [batches, setBatches] = useState(() => {
@@ -277,6 +292,67 @@
         }
       }));
     };
+
+    // --- Analytics Calculations ---
+    const getAnalytics = () => {
+      const completedBatches = batches.filter(b => b.status === "Passed" || b.status === "Discarded");
+      const totalCompleted = completedBatches.length;
+
+      // 1. FPY
+      const passedFirstTry = completedBatches.filter(b => b.status === "Passed" && b.attempt === 0).length;
+      const fpy = totalCompleted > 0 ? Math.round((passedFirstTry / totalCompleted) * 100) : 0;
+
+      // 2. Waste
+      const totalDiscards = completedBatches.filter(b => b.status === "Discarded").length;
+      const totalBangingRejects = batches.reduce((sum, b) => sum + (b.bangingRejects || 0), 0);
+
+      // 3. Bottlenecks
+      const stageFails = {};
+      batches.forEach(b => {
+        if (b.firstFailStage) {
+          stageFails[b.firstFailStage] = (stageFails[b.firstFailStage] || 0) + 1;
+        }
+      });
+      const topBottleneck = Object.keys(stageFails).sort((a,b) => stageFails[b] - stageFails[a])[0] || "None";
+
+      // 4. Problematic Produce
+      const vegStats = {};
+      completedBatches.forEach(b => {
+        if (!vegStats[b.veg]) vegStats[b.veg] = { total: 0, passedFirstTry: 0, discards: 0 };
+        vegStats[b.veg].total += 1;
+        if (b.status === "Passed" && b.attempt === 0) vegStats[b.veg].passedFirstTry += 1;
+        if (b.status === "Discarded") vegStats[b.veg].discards += 1;
+      });
+      const vegArray = Object.keys(vegStats).map(veg => {
+        const stats = vegStats[veg];
+        return {
+          veg,
+          total: stats.total,
+          fpy: Math.round((stats.passedFirstTry / stats.total) * 100),
+          discardRate: Math.round((stats.discards / stats.total) * 100)
+        };
+      }).sort((a, b) => b.total - a.total); // Sort by volume
+
+      // 5. Avg Time
+      let totalMs = 0;
+      let validTimes = 0;
+      completedBatches.forEach(b => {
+        if (b.timerStart && b.history.length > 0) {
+          const endTs = b.history[b.history.length - 1].ts;
+          if (endTs > b.timerStart) {
+            totalMs += (endTs - b.timerStart);
+            validTimes += 1;
+          }
+        }
+      });
+      const avgMs = validTimes > 0 ? totalMs / validTimes : 0;
+      const avgMins = Math.floor(avgMs / 60000);
+      const avgSecs = String(Math.floor((avgMs % 60000) / 1000)).padStart(2, '0');
+
+      return { totalCompleted, fpy, totalDiscards, totalBangingRejects, topBottleneck, stageFails, vegArray, avgMins, avgSecs };
+    };
+
+    const analytics = getAnalytics();
 
     const makeEODText = () => {
       const byVeg = new Map();
@@ -453,20 +529,17 @@
             <h1 className="text-lg font-bold">Veg Batch Checker</h1>
             <div className="flex items-center gap-3">
               <nav className="flex gap-1 text-sm items-center">
-                {["Jobs", "Plan", "Reports"].map(t => (
-                    <button key={t} onClick={()=>setTab(t)} className={"px-3 py-1.5 rounded-xl " + (tab===t ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-800")}>
-                    {t}
-                    </button>
+                {TABS.map(t => (
+                  <button 
+                    key={t.id} 
+                    onClick={() => setTab(t.id)} 
+                    className={"px-3 py-1.5 rounded-xl flex items-center justify-center " + (tab === t.id ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-800")} 
+                    aria-label={t.id}
+                  >
+                    {t.icon ? t.icon : t.label}
+                  </button>
                 ))}
-                
-                {/* Render the settings cog manually next to the mapped text tabs */}
-                <button onClick={()=>setTab("Settings")} className={"px-3 py-1.5 rounded-xl flex items-center justify-center " + (tab==="Settings" ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-800")} aria-label="Settings">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                </button>
-                </nav>
+              </nav>
               <span className="text-xs text-gray-500">v{APP_VERSION}</span>
             </div>
           </div>
@@ -536,7 +609,6 @@
               <div className="bg-white rounded-2xl shadow p-4">
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-semibold">One-off Custom Veg</h2>
-                  <HoldResetButton onConfirm={resetDay} className="px-3 py-2 rounded-xl bg-red-600 text-white font-semibold" />
                 </div>
                 <div className="mt-3 space-y-3">
                   <input value={veg} onChange={e=>setVeg(e.target.value)} placeholder="Veg name (e.g., Rare Mushroom)" className="w-full border rounded-xl p-3"/>
@@ -606,35 +678,115 @@
 
           {tab==="Reports" && (
             <div className="space-y-4">
+              {/* Analytics Dashboard */}
+              <div className="bg-white rounded-2xl shadow p-4">
+                <h2 className="text-lg font-bold mb-4">Operations Dashboard</h2>
+                <div className="grid grid-cols-2 gap-3 mb-6">
+                  {/* FPY Card */}
+                  <div className="bg-gray-50 rounded-xl p-3 border">
+                    <div className="text-xs font-semibold text-gray-500 mb-1">First-Pass Yield</div>
+                    <div className={`text-2xl font-bold ${analytics.fpy >= 90 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {analytics.fpy}%
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-1">Goal: 90%+</div>
+                  </div>
+                  
+                  {/* Time Card */}
+                  <div className="bg-gray-50 rounded-xl p-3 border">
+                    <div className="text-xs font-semibold text-gray-500 mb-1">Avg Process Time</div>
+                    <div className="text-2xl font-bold text-gray-800">
+                      {analytics.avgMins}m {analytics.avgSecs}s
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-1">Per completed batch</div>
+                  </div>
+
+                  {/* Waste Card */}
+                  <div className="bg-gray-50 rounded-xl p-3 border">
+                    <div className="text-xs font-semibold text-gray-500 mb-1">Total Waste</div>
+                    <div className="text-lg font-bold text-red-600">
+                      {analytics.totalDiscards} Batches
+                    </div>
+                    <div className="text-sm font-semibold text-orange-500">
+                      + {analytics.totalBangingRejects} items
+                    </div>
+                  </div>
+
+                  {/* Bottleneck Card */}
+                  <div className="bg-gray-50 rounded-xl p-3 border">
+                    <div className="text-xs font-semibold text-gray-500 mb-1">Top Bottleneck</div>
+                    <div className="text-lg font-bold text-gray-800 break-words">
+                      {analytics.topBottleneck}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-1">Most common failure stage</div>
+                  </div>
+                </div>
+
+                {/* Produce Table */}
+                <h3 className="text-md font-bold mb-2">Problematic Produce</h3>
+                {analytics.vegArray.length === 0 ? (
+                  <p className="text-sm text-gray-500">No completed batches yet.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-gray-100 text-gray-600">
+                        <tr>
+                          <th className="p-2 rounded-tl-lg rounded-bl-lg">Veg</th>
+                          <th className="p-2">Vol</th>
+                          <th className="p-2">FPY</th>
+                          <th className="p-2 rounded-tr-lg rounded-br-lg">Discard</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {analytics.vegArray.map(v => (
+                          <tr key={v.veg}>
+                            <td className="p-2 font-medium">{v.veg}</td>
+                            <td className="p-2">{v.total}</td>
+                            <td className={`p-2 font-bold ${v.fpy < 90 ? 'text-red-500' : 'text-emerald-500'}`}>{v.fpy}%</td>
+                            <td className="p-2 text-gray-600">{v.discardRate}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Classic Exports */}
               <div className="bg-white rounded-2xl shadow p-4">
                 <h2 className="text-lg font-semibold mb-2">End of day summary</h2>
                 <div className="flex gap-2 flex-wrap mb-3">
                   <button onClick={copyEOD} className="px-4 py-2 rounded-xl bg-gray-200">Copy text</button>
                   <button onClick={downloadEOD} className="px-4 py-2 rounded-xl bg-gray-200">Download TXT</button>
+                  <button onClick={makeCSV} className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-medium">Download CSV</button>
                 </div>
                 <pre className="whitespace-pre-wrap text-sm bg-gray-50 rounded-xl p-3 max-h-64 overflow-auto border">{makeEODText()}</pre>
-              </div>
-              <div className="bg-white rounded-2xl shadow p-4">
-                <h2 className="text-lg font-semibold mb-2">Download report</h2>
-                <button onClick={makeCSV} className="px-4 py-3 rounded-xl bg-emerald-600 text-white font-medium">Download CSV</button>
               </div>
             </div>
           )}
 
-        {tab==="Settings" && (
+          {tab==="Settings" && (
             <div className="space-y-4">
-                <div className="bg-white rounded-2xl shadow p-4">
-                <h2 className="text-lg font-semibold mb-2">Backup / Restore</h2>
+              <div className="bg-white rounded-2xl shadow p-4">
+                <h2 className="text-lg font-semibold mb-2">Backup / Restore Data</h2>
+                <p className="text-sm text-gray-600 mb-4">Export your current batches and database settings, or restore from a previous JSON file. Ensure you export before clearing data.</p>
                 <div className="flex gap-2 flex-wrap">
-                    <button onClick={exportJSON} className="px-4 py-3 rounded-xl bg-gray-200">Export JSON</button>
-                    <label className="px-4 py-3 rounded-xl bg-gray-200 cursor-pointer flex items-center">
+                  <button onClick={exportJSON} className="px-4 py-3 rounded-xl bg-gray-200 font-medium">Export JSON</button>
+                  <label className="px-4 py-3 rounded-xl bg-gray-200 cursor-pointer flex items-center font-medium">
                     Import JSON <input type="file" accept="application/json" className="hidden" onChange={importJSON} />
-                    </label>
-                    <HoldResetButton onConfirm={resetDay} className="px-4 py-3 rounded-xl bg-red-600 text-white font-semibold" />
+                  </label>
                 </div>
-                </div>
+              </div>
+              
+              <div className="bg-white rounded-2xl shadow p-4 border border-red-100">
+                 <h2 className="text-lg font-semibold mb-2">Reset</h2>
+                <p className="text-sm text-gray-600 mb-4">
+                Wipes all active and completed batches. <br />
+                <span className="text-sm text-red-600 font-bold">WARNING: This action cannot be undone unless you have exported a JSON backup.</span>
+                </p>
+                <HoldResetButton onConfirm={resetDay} className="px-4 py-3 rounded-xl bg-red-600 text-white font-bold w-full" />
+              </div>
             </div>
-            )}
+          )}
         </main>
         <div className="h-4"></div>
       </div>
