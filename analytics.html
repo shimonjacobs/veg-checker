@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Veg Batch Analytics Pro</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="theme-color" content="#1e293b" />
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased">
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+  const { useState, useMemo } = React;
+
+  function App() {
+    const [rawBatches, setRawBatches] = useState(null);
+    const [error, setError] = useState("");
+
+    const handleFileUpload = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(String(reader.result));
+          if (!Array.isArray(data)) throw new Error("Invalid format: Expected an array of batches.");
+          setRawBatches(data);
+          setError("");
+        } catch (err) {
+          setError("Failed to parse JSON. Ensure this is a valid export file.");
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    const analytics = useMemo(() => {
+      if (!rawBatches) return null;
+
+      // Filter to only completed or discarded batches
+      const completed = rawBatches.filter(b => b.status === "Passed" || b.status === "Discarded");
+      
+      const stats = {
+        totalProcessed: completed.length,
+        totalPassedFirstTry: 0,
+        totalDiscards: 0,
+        totalBangingRejects: 0,
+        byDate: {},
+        byVeg: {},
+        bottlenecks: {}
+      };
+
+      completed.forEach(b => {
+        // Determine completion date
+        let dateKey = "Unknown Date";
+        if (b.history && b.history.length > 0) {
+          const lastEventTs = b.history[b.history.length - 1].ts;
+          dateKey = new Date(lastEventTs).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        } else if (b.timerStart) {
+          dateKey = new Date(b.timerStart).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        const isFPY = b.status === "Passed" && b.attempt === 0;
+        const isDiscard = b.status === "Discarded";
+        const bangingRejects = b.bangingRejects || 0;
+
+        // Global Aggregates
+        if (isFPY) stats.totalPassedFirstTry += 1;
+        if (isDiscard) stats.totalDiscards += 1;
+        stats.totalBangingRejects += bangingRejects;
+
+        if (b.firstFailStage) {
+          stats.bottlenecks[b.firstFailStage] = (stats.bottlenecks[b.firstFailStage] || 0) + 1;
+        }
+
+        // By Date Aggregates
+        if (!stats.byDate[dateKey]) {
+          stats.byDate[dateKey] = { date: dateKey, total: 0, fpyCount: 0, discards: 0, bangingRejects: 0, parsedDate: new Date(dateKey) };
+        }
+        stats.byDate[dateKey].total += 1;
+        if (isFPY) stats.byDate[dateKey].fpyCount += 1;
+        if (isDiscard) stats.byDate[dateKey].discards += 1;
+        stats.byDate[dateKey].bangingRejects += bangingRejects;
+
+        // By Veg Aggregates
+        if (!stats.byVeg[b.veg]) {
+          stats.byVeg[b.veg] = { veg: b.veg, total: 0, fpyCount: 0, discards: 0, bangingRejects: 0 };
+        }
+        stats.byVeg[b.veg].total += 1;
+        if (isFPY) stats.byVeg[b.veg].fpyCount += 1;
+        if (isDiscard) stats.byVeg[b.veg].discards += 1;
+        stats.byVeg[b.veg].bangingRejects += bangingRejects;
+      });
+
+      // Format arrays for rendering
+      const dailyTrends = Object.values(stats.byDate)
+        .sort((a, b) => b.parsedDate - a.parsedDate) // Newest first
+        .map(d => ({
+          ...d,
+          fpy: d.total > 0 ? Math.round((d.fpyCount / d.total) * 100) : 0,
+          discardRate: d.total > 0 ? Math.round((d.discards / d.total) * 100) : 0
+        }));
+
+      const vegPerformance = Object.values(stats.byVeg)
+        .sort((a, b) => b.total - a.total) // Highest volume first
+        .map(v => ({
+          ...v,
+          fpy: v.total > 0 ? Math.round((v.fpyCount / v.total) * 100) : 0,
+          discardRate: v.total > 0 ? Math.round((v.discards / v.total) * 100) : 0
+        }));
+
+      const topBottleneck = Object.entries(stats.bottlenecks)
+        .sort((a, b) => b[1] - a[1])[0] || ["None", 0];
+
+      const globalFpy = stats.totalProcessed > 0 ? Math.round((stats.totalPassedFirstTry / stats.totalProcessed) * 100) : 0;
+
+      return { ...stats, dailyTrends, vegPerformance, topBottleneck, globalFpy };
+    }, [rawBatches]);
+
+    if (!rawBatches) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-slate-200">
+            <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 mb-2">Historical Analytics</h1>
+            <p className="text-slate-500 mb-6">Upload a JSON export file from the Veg Batch Checker to view detailed long-term performance metrics.</p>
+            
+            <label className="block w-full cursor-pointer bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3 px-4 rounded-xl transition-colors">
+              Select JSON File
+              <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} />
+            </label>
+            {error && <p className="text-red-500 text-sm mt-4 font-medium">{error}</p>}
+          </div>
+        </div>
+      );
+    }
+
+    if (analytics.totalProcessed === 0) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-4">
+          <p className="text-slate-500 mb-4">No completed batches found in this file.</p>
+          <button onClick={() => setRawBatches(null)} className="text-blue-600 font-medium hover:underline">Upload a different file</button>
+        </div>
+      );
+    }
+
+    const ProgressBar = ({ percentage, colorClass }) => (
+      <div className="w-full bg-slate-100 rounded-full h-2 mt-2 overflow-hidden">
+        <div className={`h-2 rounded-full ${colorClass}`} style={{ width: `${percentage}%` }}></div>
+      </div>
+    );
+
+    return (
+      <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+        <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Analytics Pro</h1>
+            <p className="text-slate-500 font-medium mt-1">
+              Analyzing {analytics.totalProcessed} completed batches across {analytics.dailyTrends.length} operational days.
+            </p>
+          </div>
+          <button onClick={() => setRawBatches(null)} className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-semibold hover:bg-slate-50 shadow-sm transition-colors">
+            Load New File
+          </button>
+        </header>
+
+        {/* Top Level KPIs */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="text-sm font-semibold text-slate-500 mb-2">Global First-Pass Yield</div>
+            <div className={`text-4xl font-black ${analytics.globalFpy >= 90 ? 'text-emerald-500' : 'text-amber-500'}`}>
+              {analytics.globalFpy}%
+            </div>
+            <ProgressBar percentage={analytics.globalFpy} colorClass={analytics.globalFpy >= 90 ? 'bg-emerald-500' : 'bg-amber-500'} />
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="text-sm font-semibold text-slate-500 mb-2">Total Batches Discarded</div>
+            <div className="text-4xl font-black text-rose-500">{analytics.totalDiscards}</div>
+            <div className="text-sm text-slate-500 mt-2 font-medium">
+              {Math.round((analytics.totalDiscards / analytics.totalProcessed) * 100)}% of total volume
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="text-sm font-semibold text-slate-500 mb-2">Total Banging Rejects</div>
+            <div className="text-4xl font-black text-orange-500">{analytics.totalBangingRejects}</div>
+            <div className="text-sm text-slate-500 mt-2 font-medium">Individual items failed</div>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="text-sm font-semibold text-slate-500 mb-2">Primary Bottleneck</div>
+            <div className="text-3xl font-black text-slate-800 break-words leading-tight">{analytics.topBottleneck[0]}</div>
+            <div className="text-sm text-slate-500 mt-2 font-medium">
+              {analytics.topBottleneck[1]} total failures
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Daily Trends Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h2 className="text-xl font-bold text-slate-900">Daily Trends</h2>
+              <p className="text-sm text-slate-500 mt-1">Performance broken down by operational day.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="p-4 whitespace-nowrap">Date</th>
+                    <th className="p-4">Volume</th>
+                    <th className="p-4">FPY</th>
+                    <th className="p-4">Discards</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {analytics.dailyTrends.map(day => (
+                    <tr key={day.date} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-4 font-medium text-slate-900 whitespace-nowrap">{day.date}</td>
+                      <td className="p-4 text-slate-600">{day.total} bowls</td>
+                      <td className="p-4">
+                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-bold ${day.fpy >= 90 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {day.fpy}%
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        {day.discards > 0 ? (
+                          <span className="text-rose-600 font-semibold">{day.discards} ({day.discardRate}%)</span>
+                        ) : (
+                          <span className="text-slate-400">0</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Veg Performance Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h2 className="text-xl font-bold text-slate-900">Produce Performance</h2>
+              <p className="text-sm text-slate-500 mt-1">Identifying problematic suppliers or hard-to-wash items.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="p-4 whitespace-nowrap">Vegetable</th>
+                    <th className="p-4">Volume</th>
+                    <th className="p-4">FPY</th>
+                    <th className="p-4">Banging Fails</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {analytics.vegPerformance.map(veg => (
+                    <tr key={veg.veg} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-4 font-bold text-slate-900">{veg.veg}</td>
+                      <td className="p-4 text-slate-600">{veg.total}</td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-8 font-bold ${veg.fpy >= 90 ? 'text-emerald-600' : 'text-amber-600'}`}>{veg.fpy}%</span>
+                          <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden hidden sm:block">
+                            <div className={`h-full ${veg.fpy >= 90 ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${veg.fpy}%` }}></div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {veg.bangingRejects > 0 ? (
+                          <span className="text-orange-600 font-semibold">{veg.bangingRejects} items</span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  root.render(<App />);
+  </script>
+</body>
+</html>
