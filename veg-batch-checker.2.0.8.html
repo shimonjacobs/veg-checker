@@ -362,6 +362,8 @@
     const [expanded, setExpanded] = useState([]);
     const [now, setNow] = useState(Date.now());
     const [pendingImport, setPendingImport] = useState(null);
+    const [customOpen, setCustomOpen] = useState(false);
+    const [batchToDelete, setBatchToDelete] = useState(null);
 
     useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
     useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(batches)); }, [batches]);
@@ -619,7 +621,7 @@
             </div>
             <div className="flex items-center gap-2">
               {b.status === "In Progress" && <button onClick={()=>toggleExpand(b.id)} className="px-3 py-2 rounded-xl bg-emerald-600 text-white">{expanded.includes(b.id) ? "Hide" : "Check"}</button>}
-              <button onClick={()=>deleteBatch(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
+              <button onClick={()=>setBatchToDelete(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
             </div>
           </div>
           {expanded.includes(b.id) && b.status === "In Progress" && (
@@ -659,6 +661,18 @@
     return (
       <div className="min-h-screen flex flex-col relative">
         {pendingImport && <ImportConfirmModal onConfirm={confirmImport} onCancel={() => setPendingImport(null)} />}
+        {batchToDelete && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 animate-pop-in">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Delete job?</h3>
+              <p className="text-sm text-gray-600 mb-6">This will permanently remove the job and its history.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setBatchToDelete(null)} className="flex-1 py-3 rounded-xl bg-gray-100 text-gray-700 font-medium">Cancel</button>
+                <button onClick={() => { deleteBatch(batchToDelete); setBatchToDelete(null); }} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-medium">Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col w-1/2 pointer-events-none">
           {toasts.map(t => (
@@ -672,21 +686,21 @@
 
         <header className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
           <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-            <h1 className="text-lg font-bold">Veg Batch Checker</h1>
+            <h1 className="text-sm sm:text-lg font-bold">Veg Batch Checker</h1>
             <div className="flex items-center gap-3">
-              <nav className="flex gap-1 text-sm items-center">
+              <nav className="flex gap-0.5 sm:gap-1 text-sm items-center">
                 {TABS.map(t => (
                   <button
                     key={t.id}
                     onClick={() => setTab(t.id)}
-                    className={"px-3 py-1.5 rounded-xl flex items-center justify-center " + (tab === t.id ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-800")}
+                    className={"px-2 sm:px-3 py-1.5 rounded-xl flex items-center justify-center " + (tab === t.id ? "bg-gray-900 text-white" : "bg-gray-200 text-gray-800")}
                     aria-label={t.id}
                   >
                     {t.icon ? t.icon : t.label}
                   </button>
                 ))}
               </nav>
-              <span className="text-xs text-gray-500">v{APP_VERSION}</span>
+              <span className="hidden sm:inline text-xs text-gray-500">v{APP_VERSION}</span>
             </div>
           </div>
         </header>
@@ -717,27 +731,45 @@
 
               {planned.length>0 && (
                 <div className="mt-6">
-                  <h3 className="text-sm font-semibold text-gray-600 mb-2">Available jobs</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[...planned].sort((a,b)=>a.veg.toLowerCase().localeCompare(b.veg.toLowerCase())).map(b => {
-                      const reqs = getRequiredStages(b);
-                      const isBanged = b.history.some(h => h.attempt === b.attempt && h.stage === "Banging check" && h.result === "Pass");
-                      const needsBang = reqs.includes("Banging check");
-                      const isVisualDone = b.history.some(h => h.attempt === b.attempt && h.stage === "Visual check" && h.result === "Pass");
-                      const needsVisual = reqs.includes("Visual check");
-                      return (
-                        <button key={b.id} onClick={()=>startFromPlan(b.id)} className="relative px-3 py-2 rounded-xl bg-blue-600 text-white overflow-hidden text-left flex flex-col items-start gap-1">
-                          {b.attempt > 0 && <span className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-t-black border-r-[20px] border-r-transparent" title="Rewash"></span>}
-                          <span className="font-medium">{b.veg}</span>
-                          <div className="flex gap-1 flex-wrap">
-                            {needsBang && !isBanged && <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold leading-none">Bang</span>}
-                            {isBanged && <span className="text-[10px] bg-blue-800 text-white px-1.5 py-0.5 rounded font-bold leading-none">Banged</span>}
-                            {needsVisual && !isVisualDone && <span className="text-[10px] bg-purple-600 text-white px-1.5 py-0.5 rounded font-bold leading-none">Visual</span>}
-                            {isVisualDone && <span className="text-[10px] bg-blue-800 text-white px-1.5 py-0.5 rounded font-bold leading-none">Visual Done</span>}
+                  <h3 className="text-sm font-semibold text-gray-600 mb-2 flex items-center gap-1.5">
+                    Available jobs
+                    <span className="bg-gray-200 text-gray-600 text-xs px-1.5 py-0.5 rounded-full font-medium">{planned.length}</span>
+                  </h3>
+                  <div className="space-y-2">
+                    {(() => {
+                      const sorted = [...planned].sort((a,b)=>a.veg.toLowerCase().localeCompare(b.veg.toLowerCase()));
+                      const groups = [];
+                      const keyMap = {};
+                      sorted.forEach(b => {
+                        const reqs = getRequiredStages(b);
+                        const needsBang = reqs.includes("Banging check");
+                        const isBanged = b.history.some(h => h.attempt === b.attempt && h.stage === "Banging check" && h.result === "Pass");
+                        const needsVisual = reqs.includes("Visual check");
+                        const isVisualDone = b.history.some(h => h.attempt === b.attempt && h.stage === "Visual check" && h.result === "Pass");
+                        const key = `${b.veg}|${b.attempt}|${needsBang}|${isBanged}|${needsVisual}|${isVisualDone}`;
+                        if (!keyMap[key]) {
+                          const g = { key, veg: b.veg, count: 0, batches: [], attempt: b.attempt, needsBang, isBanged, needsVisual, isVisualDone };
+                          keyMap[key] = g;
+                          groups.push(g);
+                        }
+                        keyMap[key].count++;
+                        keyMap[key].batches.push(b);
+                      });
+                      return groups.map(g => (
+                        <div key={g.key} className="flex items-center justify-between bg-gray-50 p-3 rounded-xl">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <span className="font-medium">{g.veg}</span>
+                            {g.count > 1 && <span className="text-xs bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full font-medium shrink-0">×{g.count}</span>}
+                            {g.attempt > 0 && <span className="text-[10px] bg-gray-700 text-white px-1.5 py-0.5 rounded font-bold leading-none shrink-0">Rewash</span>}
+                            {g.needsBang && !g.isBanged && <span className="text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold leading-none shrink-0">Bang</span>}
+                            {g.isBanged && <span className="text-[10px] bg-blue-800 text-white px-1.5 py-0.5 rounded font-bold leading-none shrink-0">Banged</span>}
+                            {g.needsVisual && !g.isVisualDone && <span className="text-[10px] bg-purple-600 text-white px-1.5 py-0.5 rounded font-bold leading-none shrink-0">Visual</span>}
+                            {g.isVisualDone && <span className="text-[10px] bg-blue-800 text-white px-1.5 py-0.5 rounded font-bold leading-none shrink-0">Visual Done</span>}
                           </div>
-                        </button>
-                      );
-                    })}
+                          <button onClick={()=>startFromPlan(g.batches[0].id)} className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm shrink-0 ml-2">Start</button>
+                        </div>
+                      ));
+                    })()}
                   </div>
                 </div>
               )}
@@ -756,47 +788,52 @@
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {vegDB.map(vegObj => (
-                    <button key={vegObj.name} onClick={()=>quickAdd(vegObj, selectedQty)} className="px-3 py-2 rounded-xl bg-blue-600 text-white flex justify-center items-center gap-1">
+                    <button key={vegObj.name} onClick={()=>quickAdd(vegObj, selectedQty)} className="px-2 py-2 rounded-xl bg-blue-600 text-white text-sm">
                       {vegObj.name}
-                      {vegObj.requiresBang && <span className="text-[10px] text-red-300 font-bold ml-1">(Bang)</span>}
-                      {vegObj.requiresVisual && <span className="text-[10px] text-purple-300 font-bold ml-1">(Visual)</span>}
-                      {vegObj.requiresHotWater && <span className="text-[10px] text-orange-300 font-bold ml-1">(Hot)</span>}
                     </button>
                   ))}
                 </div>
               </div>
 
               <div className="bg-white rounded-2xl shadow p-4">
-                <h2 className="text-lg font-semibold mb-3">One-off Custom Veg</h2>
-                <div className="space-y-3">
-                  <input value={veg} onChange={e=>setVeg(e.target.value)} placeholder="Veg name (e.g., Rare Mushroom)" className="w-full border rounded-xl p-3"/>
-                  <input type="number" min="1" max="500" inputMode="numeric" value={qty} onChange={e=>setQty(e.target.value)} placeholder="Quantity (jobs to create)" className="w-full border rounded-xl p-3"/>
-                  <div className="flex flex-col gap-2">
-                    <label className="flex items-center gap-2 text-sm text-gray-700">
-                      <input type="checkbox" checked={customRequiresBang} onChange={e=>setCustomRequiresBang(e.target.checked)} className="rounded w-4 h-4" />
-                      Requires 'Banging check' stage
-                    </label>
-                    <label className="flex items-center gap-2 text-sm text-gray-700">
-                      <input type="checkbox" checked={customRequiresVisual} onChange={e=>setCustomRequiresVisual(e.target.checked)} className="rounded w-4 h-4" />
-                      Requires 'Visual check' stage
-                    </label>
-                    <label className="flex items-center gap-2 text-sm text-gray-700">
-                      <input type="checkbox" checked={customRequiresHotWater} onChange={e=>setCustomRequiresHotWater(e.target.checked)} className="rounded w-4 h-4" />
-                      Requires hot water
-                    </label>
-                    <label className="flex items-center gap-2 text-sm text-gray-700">
-                      <input type="checkbox" checked={customRequiresDoubleWash} onChange={e=>setCustomRequiresDoubleWash(e.target.checked)} className="rounded w-4 h-4" />
-                      Requires second wash (Water 2 + Thrip 2)
-                    </label>
+                <button onClick={()=>setCustomOpen(o=>!o)} className="flex items-center justify-between w-full">
+                  <h2 className="text-lg font-semibold">One-off Custom Veg</h2>
+                  <span className="text-gray-400 text-sm">{customOpen ? "▲" : "▼"}</span>
+                </button>
+                {customOpen && (
+                  <div className="mt-3 space-y-3">
+                    <input value={veg} onChange={e=>setVeg(e.target.value)} placeholder="Veg name (e.g., Rare Mushroom)" className="w-full border rounded-xl p-3"/>
+                    <input type="number" min="1" max="500" inputMode="numeric" value={qty} onChange={e=>setQty(e.target.value)} placeholder="Quantity (jobs to create)" className="w-full border rounded-xl p-3"/>
+                    <div className="flex flex-col gap-2">
+                      <label className="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="checkbox" checked={customRequiresBang} onChange={e=>setCustomRequiresBang(e.target.checked)} className="rounded w-4 h-4" />
+                        Requires 'Banging check' stage
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="checkbox" checked={customRequiresVisual} onChange={e=>setCustomRequiresVisual(e.target.checked)} className="rounded w-4 h-4" />
+                        Requires 'Visual check' stage
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="checkbox" checked={customRequiresHotWater} onChange={e=>setCustomRequiresHotWater(e.target.checked)} className="rounded w-4 h-4" />
+                        Requires hot water
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="checkbox" checked={customRequiresDoubleWash} onChange={e=>setCustomRequiresDoubleWash(e.target.checked)} className="rounded w-4 h-4" />
+                        Requires second wash (Water 2 + Thrip 2)
+                      </label>
+                    </div>
+                    <button onClick={addBatch} className="w-full py-3 rounded-xl bg-gray-900 text-white font-medium">Add temporary job</button>
                   </div>
-                  <button onClick={addBatch} className="w-full py-3 rounded-xl bg-gray-900 text-white font-medium">Add temporary job</button>
-                </div>
+                )}
               </div>
 
               <div className="bg-white rounded-2xl shadow">
-                <div className="px-4 py-3 text-lg font-semibold border-b">Complete</div>
+                <div className="px-4 py-3 text-lg font-semibold border-b flex items-center gap-2">
+                  Complete
+                  {completed.length > 0 && <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-normal">{completed.length}</span>}
+                </div>
                 <div className="p-4">
                   {completed.length===0 ? <p className="text-sm text-gray-500">No completed jobs.</p> : (
                     <ul className="space-y-2">
@@ -816,28 +853,53 @@
               </div>
 
               <div className="bg-white rounded-2xl shadow">
-                <div className="px-4 py-3 text-lg font-semibold border-b">Incomplete</div>
+                <div className="px-4 py-3 text-lg font-semibold border-b flex items-center gap-2">
+                  Incomplete
+                  {(planned.length + discarded.length) > 0 && <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-normal">{planned.length + discarded.length}</span>}
+                </div>
                 <div className="p-4">
-                  {incomplete.length===0 ? <p className="text-sm text-gray-500">No incomplete jobs.</p> : (
-                    <ul className="space-y-2">
-                      {incomplete.map(b => (
-                        <li key={b.id} className="relative flex items-center justify-between bg-gray-50 p-3 rounded-xl overflow-hidden">
-                          {b.status!=="Planned" && <span className="absolute top-0 left-0 w-0 h-0 border-t-[28px] border-t-red-600 border-r-[28px] border-r-transparent"></span>}
-                          <div>
-                            <div className="font-medium">{b.veg}</div>
-                            <div className="text-xs text-gray-500">{b.qty || ""}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {b.status==="Planned" ? (
-                              <button onClick={()=>startFromPlan(b.id)} className="px-3 py-2 rounded-xl bg-blue-600 text-white">Start</button>
-                            ) : (
-                              <span className={"text-xs font-medium " + (b.status==="Discarded" ? "text-red-700" : "text-blue-700")}>{b.status}</span>
-                            )}
-                            <button onClick={()=>deleteBatch(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                  {planned.length===0 && discarded.length===0 ? <p className="text-sm text-gray-500">No incomplete jobs.</p> : (
+                    <div className="space-y-3">
+                      {planned.length > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-gray-400 uppercase mb-2">Planned</p>
+                          <ul className="space-y-2">
+                            {planned.map(b => (
+                              <li key={b.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-xl">
+                                <div>
+                                  <div className="font-medium">{b.veg}</div>
+                                  <div className="text-xs text-gray-500">{b.qty || ""}</div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button onClick={()=>startFromPlan(b.id)} className="px-3 py-2 rounded-xl bg-blue-600 text-white">Start</button>
+                                  <button onClick={()=>deleteBatch(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {discarded.length > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-gray-400 uppercase mb-2">Discarded</p>
+                          <ul className="space-y-2">
+                            {discarded.map(b => (
+                              <li key={b.id} className="relative flex items-center justify-between bg-gray-50 p-3 rounded-xl overflow-hidden">
+                                <span className="absolute top-0 left-0 w-0 h-0 border-t-[28px] border-t-red-600 border-r-[28px] border-r-transparent"></span>
+                                <div>
+                                  <div className="font-medium">{b.veg}</div>
+                                  <div className="text-xs text-gray-500">{b.qty || ""}</div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-medium text-red-700">Discarded</span>
+                                  <button onClick={()=>deleteBatch(b.id)} className="px-3 py-2 rounded-xl bg-gray-200">Delete</button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
