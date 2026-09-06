@@ -229,11 +229,11 @@ export default function App() {
       )}
 
       {/* Floating Notifications */}
-      <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col w-1/2 pointer-events-none">
+      <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex flex-col w-[90%] max-w-md pointer-events-none items-center">
         {toasts.map(t => (
-          <div key={t.id} className="toast-wrapper">
+          <div key={t.id} className="toast-wrapper w-full">
             <div
-              className={`px-4 py-3 rounded-2xl shadow-lg text-white text-center font-medium animate-bounce-in ${
+              className={`w-full px-5 py-3 rounded-2xl shadow-xl text-white text-center text-sm font-semibold animate-bounce-in ${
                 t.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'
               }`}
             >
@@ -273,7 +273,6 @@ export default function App() {
         {tab === "Jobs" && (
           <JobsPage
             active={active}
-            discarded={discarded}
             planned={planned}
             expanded={expanded}
             toggleExpand={toggleExpand}

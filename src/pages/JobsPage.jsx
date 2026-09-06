@@ -4,7 +4,6 @@ import { getRequiredStages } from '../utils/batchUtils';
 
 export default function JobsPage({
   active,
-  discarded,
   planned,
   expanded,
   toggleExpand,
@@ -47,7 +46,7 @@ export default function JobsPage({
         </div>
       )}
 
-      {active.length === 0 && discarded.length === 0 && (
+      {active.length === 0 && (
         <p className="text-sm text-gray-500">No jobs in progress. Start some below.</p>
       )}
 
@@ -62,34 +61,6 @@ export default function JobsPage({
           now={now}
         />
       ))}
-
-      {discarded.length > 0 && (
-        <div className="mt-2">
-          <h3 className="text-sm font-semibold text-red-600 mb-2">
-            Discarded this session ({discarded.length})
-          </h3>
-          <div className="space-y-2">
-            {discarded.map(b => (
-              <div
-                key={b.id}
-                className="relative flex items-center justify-between bg-red-50 border border-red-200 p-3 rounded-xl overflow-hidden"
-              >
-                <span className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-t-red-500 border-r-[20px] border-r-transparent"></span>
-                <div>
-                  <div className="font-medium text-gray-800">{b.veg}</div>
-                  <div className="text-xs text-red-500">Failed at {b.firstFailStage || "unknown stage"}</div>
-                </div>
-                <button
-                  onClick={() => deleteBatch(b.id)}
-                  className="px-3 py-1.5 rounded-xl bg-gray-200 text-sm"
-                >
-                  Delete
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {planned.length > 0 && (
         <div className="mt-6">
