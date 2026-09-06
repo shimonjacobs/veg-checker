@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+button { touch-action: manipulation; }
+
+@keyframes toast-shrink {
+  0%, 71% { max-height: 80px; margin-bottom: 0.5rem; }
+  100% { max-height: 0; margin-bottom: 0; }
+}
+@keyframes toast-float {
+  0% { transform: scale(0.9); opacity: 0; }
+  12% { transform: scale(1); opacity: 1; }
+  71% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-40px); opacity: 0; }
+}
+.toast-wrapper { animation: toast-shrink 1.7s ease-out forwards; overflow: hidden; }
+.animate-bounce-in { animation: toast-float 1.7s ease-out forwards; }
+@keyframes pop-in {
+  0% { transform: scale(0.9); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.animate-pop-in { animation: pop-in 0.2s ease-out forwards; }
