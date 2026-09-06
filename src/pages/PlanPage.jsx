@@ -39,12 +39,17 @@ export default function PlanPage({
     setCustomRequiresDoubleWash(false);
   };
 
+  const handleQuickAdd = (vegObj) => {
+    quickAdd(vegObj, selectedQty);
+    setSelectedQty(1);
+  };
+
   return (
     <div className="space-y-4">
-      {/* Vegetable Database Quick-Add */}
+      {/* Produce Presets Quick-Add */}
       <div className="bg-white rounded-2xl shadow p-4">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Vegetable Database</h2>
+          <h2 className="text-lg font-semibold">Produce Presets</h2>
           <div className="flex items-center gap-2 text-sm">
             <span>Qty:</span>
             {[1, 2, 4, 6, 8].map(n => (
@@ -67,7 +72,7 @@ export default function PlanPage({
           {vegDB.map(vegObj => (
             <button
               key={vegObj.name}
-              onClick={() => quickAdd(vegObj, selectedQty)}
+              onClick={() => handleQuickAdd(vegObj)}
               className="px-2 py-2 rounded-xl bg-blue-600 text-white text-sm"
             >
               {vegObj.name}
