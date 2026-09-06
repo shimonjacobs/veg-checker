@@ -1,4 +1,4 @@
-export const APP_VERSION = "3.0.0";
+export const APP_VERSION = "3.1.0";
 export const STORAGE_KEY = "veg-batch-checker:v9";
 export const VEG_DB_KEY = "veg-batch-checker:vegdb-v4";
 export const META_KEY = "veg-batch-checker:meta";
